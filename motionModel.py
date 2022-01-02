@@ -196,15 +196,17 @@ class TrackFollowingFilter(BaseFilter):
 
         #Prepare the lookup table
         
-        self.length_in = np.linalg.norm(enu_mat_in[-1,:1]-enu_mat_in[0,:1])+enu_mat_in[-1,2]#get the total length of the track
-        last_enu = np.array([enu_mat_in[0,0],enu_mat_in[0,1],self.length_in])
-        enu_mat_in = np.concatenate((enu_mat_in,last_enu[None,:]),axis=0) #add the first point to the end of the list
-        last_enu = enu_mat_in[0,:]
-        self.enu_mat_in = np.concatenate((enu_mat_in,last_enu[None,:]),axis=0)
+        self.length_in = np.linalg.norm(enu_mat_in[-1,:2]-enu_mat_in[0,:2])+enu_mat_in[-1,2]#get the total length of the track
+        # enu_mat_in =np.concatenate((enu_mat_in,np.array([enu_mat_in[0,0],enu_mat_in[0,1],self.length_in])[None,:]),axis=0)
+        # last_enu = enu_mat_in[0,:]
 
+        # self.enu_mat_in = np.concatenate((enu_mat_in,last_enu[None,:]),axis=0)
+        self.enu_mat_in = enu_mat_in
+
+        new_dot = np.array([enu_mat_in[0,0],enu_mat_in[0,1],self.length_in])[None,:]
         #Do it again for the outter ring
 
-        self.length_out = np.linalg.norm(enu_mat_out[-1,:1]-enu_mat_out[0,:1])+enu_mat_out[-1,2]#get the total length of the track
+        self.length_out = np.linalg.norm(enu_mat_out[-1,:2]-enu_mat_out[0,:2])+enu_mat_out[-1,2]#get the total length of the track
         enu_mat_out =np.concatenate((enu_mat_out,np.array([enu_mat_out[0,0],enu_mat_out[0,1],self.length_out])[None,:]),axis=0) #add the first point to the end of the list
         last_enu = enu_mat_out[0,:]
         self.enu_mat_out = np.concatenate((enu_mat_out,last_enu[None,:]),axis=0)
@@ -314,28 +316,51 @@ class TrackFollowingFilter(BaseFilter):
             # enumerate through the enu look up table, find the entry with the closest distance, and interpolate the distance from 
             #point i and point i+1
 
-        posx_in = 0
-        posy_in = 0
-        posx_out = 0
-        posy_out = 0
+        posx_in = None
+        posy_in = None
+        posx_out = None
+        posy_out = None
 
-        for i, enu in enumerate(self.enu_mat_in[:-1,:]): #TODO Edge cases!
+        for i in range(len(self.enu_mat_in)-1): #TODO Edge cases!
             # print(i,enu[2],self.distSF_in,self.length_in)
             # if enu[2] > self.distSF_in:
+            enu = self.enu_mat_in[i]
             if enu[2] >= distSF_in:
-                posx_in = self._map(distSF_in, enu[2], self.enu_mat_in[i+1][2], enu[0], self.enu_mat_in[i+1][0])
-                posy_in = self._map(distSF_in, enu[2], self.enu_mat_in[i+1][2], enu[1], self.enu_mat_in[i+1][1])
+                # print(i,enu[2],distSF_in,self.length_in)
+                # print('next')
+                posx_in = self._map(distSF_in, self.enu_mat_in[i-1][2], enu[2],  self.enu_mat_in[i-1][0],enu[0])
+                posy_in = self._map(distSF_in, self.enu_mat_in[i-1][2], enu[2],  self.enu_mat_in[i-1][1],enu[1] )
                 break
+
+        """NOTE This is a dirty hack to close the gap:"""
+        if posx_in is None:
+            posx_in = self._map(distSF_in, self.enu_mat_in[-3,2], self.enu_mat_in[5,2] + self.length_in,  self.enu_mat_in[-3,0],self.enu_mat_in[5,0])
+        if posy_in is None:
+            posy_in = self._map(distSF_in, self.enu_mat_in[-3,2], self.enu_mat_in[5,2] + self.length_in,  self.enu_mat_in[-3,1],self.enu_mat_in[5,1])
+            
+
 
         distance_SF_out = distSF_in * self.in_out_ratio
         if distance_SF_out > self.length_out:
             distance_SF_out -= self.length_out
         for i, enu in enumerate(self.enu_mat_out[:-1,:]):
             if enu[2] >= distance_SF_out:
-                posx_out = self._map(distance_SF_out, enu[2], self.enu_mat_out[i+1][2], enu[0], self.enu_mat_out[i+1][0])
-                posy_out = self._map(distance_SF_out, enu[2], self.enu_mat_out[i+1][2], enu[1], self.enu_mat_out[i+1][1])
+                posx_out = self._map(distance_SF_out, enu[2], self.enu_mat_out[i-1][2], enu[0], self.enu_mat_out[i-1][0])
+                posy_out = self._map(distance_SF_out, enu[2], self.enu_mat_out[i-1][2], enu[1], self.enu_mat_out[i-1][1])
                 break
-        
+            
+        """NOTE This is a dirty hack to close the gap:"""
+        if posx_out is None:
+            posx_out = self._map(distance_SF_out, self.enu_mat_out[-3,2], self.enu_mat_out[5,2] + self.length_out, self.enu_mat_out[-3,0], self.enu_mat_out[5,0])
+        if posy_out is None:
+            posy_out = self._map(distance_SF_out, self.enu_mat_out[-3,2], self.enu_mat_out[5,2] + self.length_out, self.enu_mat_out[-3,1], self.enu_mat_out[5,1])
+        '''
+        DEBUG
+        '''
+        # self.test_posx_in = posx_in
+        # self.test_posy_in = posy_in
+        # self.test_posx_out = posx_out
+        # self.test_posy_out = posy_out
 
         self.posx_lidar = self._map(lateral,0,self.track_width,posx_in,posx_out) 
         self.posy_lidar = self._map(lateral,0,self.track_width,posy_in,posy_out)
@@ -454,10 +479,10 @@ class TrackFollowingFilter(BaseFilter):
         # self.state = np.array([distSF_in, lateral, velocity, adjust]).T
 
         # Boundary check
-        if self.state[0] < 0 :
-            self.state[0] += self.length_in
-        if self.state[0] > self.length_in:
-            self.state[0] -= self.length_in
+        # if self.state[0] < 0 :
+        #     self.state[0] += self.length_in
+        # if self.state[0] > self.length_in:
+        #     self.state[0] -= self.length_in
 
         self.last_observation = observation
 
@@ -495,7 +520,7 @@ class TrackFollowingFilter(BaseFilter):
         #Generate Kalman Gain
         innovation = observation - self.observationFunc(self.state)[0:2]
         ''' The different part: obs func and obs cov is different'''
-        innovationCov = obsJacobian.dot(stateCovE).dot(obsJacobian.T) + self.obs_noise_cov[:2,:2]
+        innovationCov = obsJacobian.dot(stateCovE).dot(obsJacobian.T) #+ self.obs_noise_cov[:2,:2]
 
         kalmanGain = stateCovE.dot(obsJacobian.T).dot(np.linalg.inv(innovationCov))
         #Correct prediction
@@ -503,17 +528,17 @@ class TrackFollowingFilter(BaseFilter):
         self.stateCovariance = (np.eye(self.stateDim) - kalmanGain.dot(obsJacobian)).dot(stateCovE)
 
         #going back check
-        if self.last_observation is not None:
-            if self.last_observation[0] > observation[0]+100:  #the car passing start line
-                self.state[0] = observation[0]
-                adjust = self.last_observation[0]/self.length_in
+        # if self.last_observation is not None:
+        #     if self.last_observation[0] > observation[0]+100:  #the car passing start line
+        #         self.state[0] = observation[0]
+        #         adjust = self.last_observation[0]/self.length_in
 
-        if self.state[0] < 0 :
-            print("Warning: distSF_in < 0")
-            self.state[0] += self.length_in
-        if self.state[0] > self.length_in:
-            print("Warning: distSF_in > length_in")
-            self.state[0] -= self.length_in
+        # if self.state[0] < 0 :
+        #     print("Warning: distSF_in < 0")
+        #     self.state[0] += self.length_in
+        # if self.state[0] > self.length_in:
+        #     print("Warning: distSF_in > length_in")
+        #     self.state[0] -= self.length_in
         
         #By passing the EKF
         self.state[1] = lateral
@@ -536,6 +561,7 @@ if __name__ == '__main__':
 
     from enviroment import *
     import time
+    import matplotlib.pyplot as plt
     enu_in = prepare_data('vegas_insideBounds.csv')
     enu_out = prepare_data('vegas_outsideBounds.csv')
 
@@ -543,12 +569,39 @@ if __name__ == '__main__':
     enu_in_viz = enu_in[:,:2] + np.array([1920/2,1080/2])
     enu_out_viz = enu_out[:,:2] + np.array([1920/2,1080/2])
     
-    pygame.init()
-    screen = pygame.display.set_mode((1920, 1080))
+    
     env = PointEnvRaceTrack(1920, 1080, enu_in, enu_out, distSF_in=2000, lateral=10, velocity=100,adjust=1.01)
 
-    track_filter = TrackFollowingFilter(enu_in, enu_out, distSF_in=10, lateral= 1,velocity=100, adjust=1.0)
+    track_filter = TrackFollowingFilter(enu_in, enu_out, distSF_in=10, lateral= 10,velocity=100, adjust=1.03)
     
+    # #plot a line of x calculated from distSF_in
+    # x_in = np.linspace(2410,track_filter.length_in+10,100)
+    # test_posx_in = []
+    # test_posy_in = []
+    # test_posx_out = []
+    # test_posy_out = []
+    # for x in x_in:
+    #     track_filter.getXY(np.array([x,0,0,1.0]))
+    #     test_posx_in.append(track_filter.test_posx_in)
+    #     test_posy_in.append(track_filter.test_posy_in)
+    #     test_posx_out.append(track_filter.test_posx_out)
+    #     test_posy_out.append(track_filter.test_posy_out)
+    
+    # #plot 4 subplots for each value
+    # fig, axs = plt.subplots(4,1,figsize=(10,10))
+    # axs[0].plot(x_in,test_posx_in)
+    # axs[0].set_title('test_posx_in')
+    # axs[2].plot(x_in,test_posx_out)
+    # axs[2].set_title('test_posx_out')
+    # axs[1].plot(x_in,test_posy_in)
+    # axs[1].set_title('test_posy_in')
+    # axs[3].plot(x_in,test_posy_out)
+    # axs[3].set_title('test_posy_out')
+    # plt.show()
+
+
+    pygame.init()
+    screen = pygame.display.set_mode((1920, 1080))
     start_time = time.time()
     while True:
         for event in pygame.event.get():
@@ -566,7 +619,7 @@ if __name__ == '__main__':
             obs.append(i)
 
         # Use the kalman filter
-        if (time.time() - start_time)%10 > 8 :
+        if (time.time() - start_time)%10 > 8 and False :
             stateVector, stateCovariance, innovationCov = track_filter.update(obs, env.get_last_dt())
         else:
             print('use My Lap only',obs_mylap)
