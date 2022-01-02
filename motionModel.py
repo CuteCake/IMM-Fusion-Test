@@ -192,17 +192,16 @@ class TrackFollowingFilter(BaseFilter):
         ...
         [x,y,distSF_in]]
     '''
-    def __init__(self,enu_mat_in, enu_mat_out, distSF_in = 0,lateral = 5,velocity = 0):
+    def __init__(self, enu_mat_in, enu_mat_out, distSF_in = 0,lateral = 5,velocity = 0, adjust = 1.01):
 
         #Prepare the lookup table
         
         self.length_in = np.linalg.norm(enu_mat_in[-1,:1]-enu_mat_in[0,:1])+enu_mat_in[-1,2]#get the total length of the track
         last_enu = np.array([enu_mat_in[0,0],enu_mat_in[0,1],self.length_in])
         enu_mat_in = np.concatenate((enu_mat_in,last_enu[None,:]),axis=0) #add the first point to the end of the list
-
-
         last_enu = enu_mat_in[0,:]
         self.enu_mat_in = np.concatenate((enu_mat_in,last_enu[None,:]),axis=0)
+
         #Do it again for the outter ring
 
         self.length_out = np.linalg.norm(enu_mat_out[-1,:1]-enu_mat_out[0,:1])+enu_mat_out[-1,2]#get the total length of the track
@@ -211,12 +210,8 @@ class TrackFollowingFilter(BaseFilter):
         self.enu_mat_out = np.concatenate((enu_mat_out,last_enu[None,:]),axis=0)
 
         #Initialize the state
-        adjust_init = 1.01
-        self.state = np.array([distSF_in, lateral, velocity, adjust_init]).T
+        self.state = np.array([distSF_in, lateral, velocity, adjust]).T
 
-        #Initialize the observation from my lap
-        self.distSF_mylap = distSF_in * adjust_init
-        self.velocity = velocity
 
         #Initialize the output from Lidar
         self.posx = 0
@@ -232,7 +227,7 @@ class TrackFollowingFilter(BaseFilter):
 
         #Noise assumption about state transition and observation
         # state =                   [distSF_in, lateral, velocity, adjust]
-        self.state_tran_noise_cov = np.diag([    1,       0.1,       1,   0.0001])
+        self.state_tran_noise_cov = np.diag([    5,       0.1,       1,   0.00001])
         # observation =          [distSF_mylap, velocity, x,    y,  v] 
         self.obs_noise_cov = np.diag([1,        1,       3,     3,   1])
 
@@ -267,8 +262,8 @@ class TrackFollowingFilter(BaseFilter):
         
         if adjust > 1.03785:
             adjust = 1.03785
-        if adjust < 1:
-            adjust = 1
+        if adjust < 0.99:
+            adjust = 0.99
 
         stateVector = np.array([distSF_in, lateral, velocity, adjust]).T
         return stateVector
@@ -340,6 +335,9 @@ class TrackFollowingFilter(BaseFilter):
         observation = [self.distSF_mylap, velocity, self.posx_lidar,self.posy_lidar,self.v_lidar]
         return observation
 
+    def observationFunc_np(self,stateVector):
+        return np.array(self.observationFunc(stateVector)).T
+
     def getObservationJacobian(self,stateVector):
         '''
         state = [distSF_in, lateral, velocity, adjust]
@@ -358,26 +356,26 @@ class TrackFollowingFilter(BaseFilter):
             [   M3,      M4,    0,          0    ],
             [0,         0,      1,          0    ]
         '''
-        obs_of_stateVector = self.observationFunc(stateVector)
+        obs_of_stateVector = self.observationFunc_np(stateVector)
         #Calc M1 dx/ddistSF
         state_offset = stateVector
         state_offset[0]+=0.1
-        obs_diff = self.observationFunc(state_offset)-obs_of_stateVector
+        obs_diff = self.observationFunc_np(state_offset)-obs_of_stateVector
         m1 = obs_diff[2]*10
         #Calc M2 dx/dlateral
         state_offset = stateVector
         state_offset[1]+=0.1
-        obs_diff = self.observationFunc(state_offset)-obs_of_stateVector
+        obs_diff = self.observationFunc_np(state_offset)-obs_of_stateVector
         m2 = obs_diff[2]*10
         #Calc M3 dy/ddistSF
         state_offset = stateVector
         state_offset[0]+=0.1
-        obs_diff = self.observationFunc(state_offset)-obs_of_stateVector
+        obs_diff = self.observationFunc_np(state_offset)-obs_of_stateVector
         m3 = obs_diff[3]*10
         #Calc M4 dy/dlateral
         state_offset = stateVector
         state_offset[1]+=0.1
-        obs_diff = self.observationFunc(state_offset)-obs_of_stateVector
+        obs_diff = self.observationFunc_np(state_offset)-obs_of_stateVector
         m4 = obs_diff[3]*10
 
         adjust = stateVector[3]
@@ -396,7 +394,7 @@ class TrackFollowingFilter(BaseFilter):
 
     def update(self, observation,  dt, observationCovariance=None ):
         if observationCovariance is not None:
-            self.observationCovariance = observationCovariance
+            self.obs_noise_cov = observationCovariance
         '''
         observation: [x,y]
         dt: time since last update
@@ -406,7 +404,7 @@ class TrackFollowingFilter(BaseFilter):
 
         #Calculate the Jacobian matrix
         stateUpdateJacobian = self.getStateUpdateJacobian(dt)
-        obsJacobian = self.getObservationJacobian(self.stateVector)
+        obsJacobian = self.getObservationJacobian(self.state)
 
         #Prediction step
         stateE = self.stateUpdate(dt,self.state)
@@ -419,7 +417,63 @@ class TrackFollowingFilter(BaseFilter):
 
         kalmanGain = stateCovE.dot(obsJacobian.T).dot(np.linalg.inv(innovationCov))
         #Correct prediction
-        self.stateVector = stateE + kalmanGain.dot(np.array(innovation))
+        self.state = stateE + kalmanGain.dot(np.array(innovation))
         self.stateCovariance = (np.eye(self.stateDim) - kalmanGain.dot(obsJacobian)).dot(stateCovE)
+
+        return self.state, self.stateCovariance, innovationCov
+
+    def getXY(self,stateVector):
+        '''
+        state = [distSF_in, lateral, velocity, adjust]
+        obs = [distSF_mylap, velocity, x , y, v].T 
+        '''
+        obs_of_stateVector = self.observationFunc(stateVector)
+        return obs_of_stateVector[2],obs_of_stateVector[3]
+
+if __name__ == '__main__':
+
+    from enviroment import *
+
+    enu_in = prepare_data('vegas_insideBounds.csv')
+    enu_out = prepare_data('vegas_outsideBounds.csv')
+
+    #initialize visualization 
+    enu_in_viz = enu_in[:,:2] + np.array([1920/2,1080/2])
+    enu_out_viz = enu_out[:,:2] + np.array([1920/2,1080/2])
+    
+    pygame.init()
+    screen = pygame.display.set_mode((1920, 1080))
+    env = PointEnvRaceTrack(1920, 1080, enu_in, enu_out, distSF_in=10, lateral=2, velocity=100,adjust=1.01)
+
+    track_filter = TrackFollowingFilter(enu_in, enu_out, distSF_in=0, lateral= 15,velocity=10, adjust=1.03)
+
+    while True:
+        for event in pygame.event.get():
+            if event.type == pygame.QUIT:
+                pygame.quit()
+                quit()
+        #Step the environment
+        screen.fill((0, 0, 0))
+        obs_mylap, obs_lidar = env.step()
+        env.draw(screen)
+
+        #concatenate the observation
+        obs = obs_mylap
+        for i in obs_lidar:
+            obs_mylap.append(i)
+
+        # Use the kalman filter
+        stateVector, stateCovariance, innovationCov = track_filter.update(obs, env.get_last_dt())
+        print(stateVector)
+        xpos , ypos = track_filter.getXY(stateVector)
+
+        xpos_viz = xpos + 1920/2
+        ypos_viz = ypos + 1080/2
         
-        return self.stateVector, self.stateCovariance, innovationCov
+        pygame.draw.circle(screen, (0, 0, 255), (int(xpos_viz), int(ypos_viz)), 5)
+        
+        pygame.draw.aalines(screen, (255, 255, 255), True, enu_in_viz, 1)
+        pygame.draw.circle(screen, (255, 255, 255), (int(enu_in_viz[0][0]),int(enu_in_viz[0][1])), 2)
+        pygame.draw.aalines(screen, (255, 255, 255), True, enu_out_viz, 1)
+        pygame.draw.circle(screen, (255, 255, 255), (int(enu_out_viz[0][0]),int(enu_out_viz[0][1])), 2)
+        pygame.display.update()

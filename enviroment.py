@@ -16,7 +16,6 @@ Dependency: pygame,  installation see:https://www.pygame.org/wiki/GettingStarted
             pymap3d, use pip install pymap3d
 '''
 
-from hashlib import new
 import random
 import pygame
 import numpy as np
@@ -68,7 +67,7 @@ class Point:
         ...
         [x,y,distSF_in]]
     '''
-    def __init__(self,enu_mat_in, enu_mat_out, distSF_in = 0,lateral = 5,velocity = 0):
+    def __init__(self,enu_mat_in, enu_mat_out, distSF_in = 0,lateral = 1,velocity = 0, adjust = 1.01):
 
         #Prepare the lookup table
         
@@ -89,7 +88,7 @@ class Point:
         self.distSF_in = distSF_in
         self.lateral = lateral
         self.velocity = velocity
-        self.adjust = 1.01
+        self.adjust = adjust
 
 
         #Initialize the observation from my lap
@@ -167,9 +166,9 @@ class Point:
 
 
 class PointEnvRaceTrack:
-    def __init__(self, width, height,enu_mat_in, enu_mat_out, distSF_in = 0,lateral = 10,velocity = 100):
+    def __init__(self, width, height,enu_mat_in, enu_mat_out, distSF_in = 2410,lateral = 10,velocity = 100, adjust = 1.01):
         
-        self.point = Point(enu_mat_in, enu_mat_out, distSF_in,lateral,velocity)
+        self.point = Point(enu_mat_in, enu_mat_out, distSF_in,lateral,velocity,adjust)
 
         self.width = width
         self.height = height

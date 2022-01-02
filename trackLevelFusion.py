@@ -23,3 +23,4 @@ from motionModel import ConstantVelocityFilter, TrackFollowingFilter
 class TrackLevelFilter:
     def __init__(self) -> None:
         pass
+
