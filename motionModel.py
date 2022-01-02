@@ -229,14 +229,14 @@ class TrackFollowingFilter(BaseFilter):
 
         #Noise assumption about state transition and observation
         # state =                   [distSF_in, lateral, velocity, adjust]
-        self.state_tran_noise_cov = np.diag([    5,       0.1,       1,   0.00001])
+        self.state_tran_noise_cov = np.diag([    2,       0.1,       1,   0.00001])
         # observation =          [distSF_mylap, velocity, x,    y,  v] 
         self.obs_noise_cov = np.diag([5,        5,       3,     3,   1])
 
         #Initial state covariance
-        self.stateCovariance = self.state_tran_noise_cov
+        self.stateCovariance = self.state_tran_noise_cov * 5
                                             
-        self.observationCovariance = self.obs_noise_cov
+        self.observationCovariance = self.obs_noise_cov 
 
         self.last_observation = None
 
@@ -249,25 +249,25 @@ class TrackFollowingFilter(BaseFilter):
             adjust = adjust
         '''
         distSF_in = stateVector[0] + stateVector[2]*dt
-        lateral = stateVector[1]
+        lateral =  stateVector[1]
         velocity = stateVector[2]
-        adjust = stateVector[3]
+        adjust = 1.03785#stateVector[3]
 
-        # Check the boundary
-        if distSF_in > self.length_in:
-            distSF_in -= self.length_in
-        if distSF_in < 0:
-            distSF_in += self.length_in
+        # should not Check the boundary here
+        # if distSF_in > self.length_in:
+        #     distSF_in -= self.length_in
+        # if distSF_in < 0:
+        #     distSF_in += self.length_in
 
-        # if lateral > self.track_width:
-        #     lateral = self.track_width
-        # if lateral < 0:
-        #     lateral = 0
+        if lateral > self.track_width:
+            lateral = self.track_width
+        if lateral < 0:
+            lateral = 0
         
-        # if adjust > 1.03785:
-        #     adjust = 1.03785
-        # if adjust < 0.99:
-        #     adjust = 0.99
+        if adjust > 1.03785:
+            adjust = 1.03785
+        if adjust < 0.99:
+            adjust = 0.99
 
         stateVector = np.array([distSF_in, lateral, velocity, adjust]).T
         return stateVector
@@ -306,7 +306,7 @@ class TrackFollowingFilter(BaseFilter):
             distSF_in += self.length_in
         if distSF_in > self.length_in:
             print('distSF_in is larger than the length of the track')
-            distSF_in -= self.length_in
+            distSF_in = distSF_in % self.length_in
 
         #Get the my lap observation
         self.distSF_mylap = distSF_in * adjust
@@ -466,23 +466,18 @@ class TrackFollowingFilter(BaseFilter):
         # if distSF_in < 0:
         #     distSF_in += self.length_in
 
-        # # if lateral > self.track_width:
-        # #     lateral = self.track_width
-        # # if lateral < 0:
-        # #     lateral = 0
+        # if lateral > self.track_width:
+        #     lateral = self.track_width
+        # if lateral < 0:
+        #     lateral = 0
         
-        # # if adjust > 1.03785:
-        # #     adjust = 1.03785
-        # # if adjust < 0.99:
-        # #     adjust = 0.99
+        # if adjust > 1.03785:
+        #     adjust = 1.03785
+        # if adjust < 0.99:
+        #     adjust = 0.99
 
         # self.state = np.array([distSF_in, lateral, velocity, adjust]).T
 
-        # Boundary check
-        # if self.state[0] < 0 :
-        #     self.state[0] += self.length_in
-        # if self.state[0] > self.length_in:
-        #     self.state[0] -= self.length_in
 
         self.last_observation = observation
 
@@ -520,25 +515,31 @@ class TrackFollowingFilter(BaseFilter):
         #Generate Kalman Gain
         innovation = observation - self.observationFunc(self.state)[0:2]
         ''' The different part: obs func and obs cov is different'''
-        innovationCov = obsJacobian.dot(stateCovE).dot(obsJacobian.T) #+ self.obs_noise_cov[:2,:2]
+        innovationCov = obsJacobian.dot(stateCovE).dot(obsJacobian.T) + self.obs_noise_cov[:2,:2]
 
         kalmanGain = stateCovE.dot(obsJacobian.T).dot(np.linalg.inv(innovationCov))
         #Correct prediction
         self.state = stateE + kalmanGain.dot(np.array(innovation))
         self.stateCovariance = (np.eye(self.stateDim) - kalmanGain.dot(obsJacobian)).dot(stateCovE)
 
-        #going back check
-        # if self.last_observation is not None:
-        #     if self.last_observation[0] > observation[0]+100:  #the car passing start line
-        #         self.state[0] = observation[0]
-        #         adjust = self.last_observation[0]/self.length_in
+        # going back check
+        if self.last_observation is not None:
+            if self.last_observation[0] > observation[0]+100:  #the car passing start line
+                self.state[0] = observation[0]
+                # adjust = self.last_observation[0]/self.length_in
 
-        # if self.state[0] < 0 :
-        #     print("Warning: distSF_in < 0")
-        #     self.state[0] += self.length_in
-        # if self.state[0] > self.length_in:
-        #     print("Warning: distSF_in > length_in")
-        #     self.state[0] -= self.length_in
+        if lateral > self.track_width:
+            lateral = self.track_width
+        if lateral < 0:
+            lateral = 0
+        
+        if adjust > 1.03785:
+            adjust = 1.03785
+        if adjust < 0.99:
+            adjust = 0.99
+
+        if self.state[0] < 0 or self.state[0] > self.length_in:
+            self.state = stateE
         
         #By passing the EKF
         self.state[1] = lateral
@@ -570,12 +571,12 @@ if __name__ == '__main__':
     enu_out_viz = enu_out[:,:2] + np.array([1920/2,1080/2])
     
     
-    env = PointEnvRaceTrack(1920, 1080, enu_in, enu_out, distSF_in=2000, lateral=10, velocity=100,adjust=1.01)
+    env = PointEnvRaceTrack(1920, 1080, enu_in, enu_out, distSF_in=2000, lateral=10, velocity=100,adjust=1.03785)
 
-    track_filter = TrackFollowingFilter(enu_in, enu_out, distSF_in=10, lateral= 10,velocity=100, adjust=1.03)
+    track_filter = TrackFollowingFilter(enu_in, enu_out, distSF_in=200, lateral= 5,velocity=10, adjust=1.03785)
     
     # #plot a line of x calculated from distSF_in
-    # x_in = np.linspace(2410,track_filter.length_in+10,100)
+    # x_in = np.linspace(0,track_filter.length_in+100,100)
     # test_posx_in = []
     # test_posy_in = []
     # test_posx_out = []
@@ -619,13 +620,14 @@ if __name__ == '__main__':
             obs.append(i)
 
         # Use the kalman filter
-        if (time.time() - start_time)%10 > 8 and False :
+        if (time.time() - start_time)%10 > 5 :
+            print('using Lidar Fusion')
             stateVector, stateCovariance, innovationCov = track_filter.update(obs, env.get_last_dt())
         else:
-            print('use My Lap only',obs_mylap)
+            print('use My Lap only')
             stateVector, stateCovariance, innovationCov = track_filter.update_mylap_only(obs_mylap, env.get_last_dt())
 
-        print(stateVector,stateCovariance[0][0])
+        # print(stateVector,stateCovariance[0][0])
         xpos , ypos = track_filter.getXY(stateVector)
 
         xpos_viz = xpos + 1920/2

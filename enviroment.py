@@ -238,7 +238,7 @@ def get_enu_from_csv(csv_file):
     enu = np.array(enu)[:,:2]
     return enu
     enu = enu + np.array([1920/2,1080/2])
-    print(enu)
+    # print(enu)
 #helper function
 def get_distance_SF(enu):
     total_distance = 0
