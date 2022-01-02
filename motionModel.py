@@ -396,7 +396,7 @@ class TrackFollowingFilter(BaseFilter):
         if observationCovariance is not None:
             self.obs_noise_cov = observationCovariance
         '''
-        observation: [x,y]
+        observation =  [distSF_mylap, velocity, x , y, v].T  
         dt: time since last update
         '''
         # adjust the data dypt of the observation
@@ -421,6 +421,39 @@ class TrackFollowingFilter(BaseFilter):
         self.stateCovariance = (np.eye(self.stateDim) - kalmanGain.dot(obsJacobian)).dot(stateCovE)
 
         return self.state, self.stateCovariance, innovationCov
+
+    def update_mylap(self, observation,  dt, observationCovariance=None ):
+        '''
+        observation = [distSF_mylap, velocity].T  
+        dt: time since last update
+        '''
+        # adjust the data dypt of the observation
+        observation = np.array(observation).T
+
+        #Calculate the Jacobian matrix
+        stateUpdateJacobian = self.getStateUpdateJacobian(dt)
+        obsJacobian = self.getObservationJacobian(self.state)
+
+        """
+        The difference part: the observation and the jacobian matrix is different
+        """
+
+        #Prediction step
+        stateE = self.stateUpdate(dt,self.state)
+        stateCovE = stateUpdateJacobian.dot(self.stateCovariance).dot(stateUpdateJacobian.T) + \
+            self.state_tran_noise_cov
+
+        #Generate Kalman Gain
+        innovation = observation - self.observationFunc(self.state)
+        innovationCov = obsJacobian.dot(stateCovE).dot(obsJacobian.T) + self.obs_noise_cov
+
+        kalmanGain = stateCovE.dot(obsJacobian.T).dot(np.linalg.inv(innovationCov))
+        #Correct prediction
+        self.state = stateE + kalmanGain.dot(np.array(innovation))
+        self.stateCovariance = (np.eye(self.stateDim) - kalmanGain.dot(obsJacobian)).dot(stateCovE)
+
+        return self.state, self.stateCovariance, innovationCov
+
 
     def getXY(self,stateVector):
         '''

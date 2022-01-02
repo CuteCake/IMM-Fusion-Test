@@ -116,27 +116,51 @@ class Point:
         if self.distSF_in > self.length_in:
             self.distSF_in -= self.length_in
 
+
+        stateVec = [self.distSF_in,self.lateral,self.velocity,self.adjust]
+        observation = self.observationFunc(stateVec)
+
+        obs_mylap = observation[:2]
+        obs_lidar_enu = observation[2:]
+
+        # self.velocity += random.gauss(0,2)
+
+        return obs_mylap, obs_lidar_enu
+    
+    def observationFunc(self,stateVector):
+        '''
+              state = [distSF_in, lateral, velocity, adjust].T
+        observation = [distSF_mylap, velocity, x , y, v].T 
+        Use the lookup table to get the observation
+        '''
+        
+        distSF_in = stateVector[0]
+        lateral = stateVector[1]
+        velocity = stateVector[2]
+        adjust = stateVector[3]
+
         #Get the my lap observation
-        self.distSF_mylap = self.distSF_in * self.adjust
-        self.velocity_mylap = self.velocity
-        obs_mylap = [self.distSF_mylap, self.velocity]
+        self.distSF_mylap = distSF_in * adjust
+        self.velocity_mylap = velocity
 
         #Get the Lidar observation
             # enumerate through the enu look up table, find the entry with the closest distance, and interpolate the distance from 
             #point i and point i+1
+
         posx_in = 0
         posy_in = 0
         posx_out = 0
         posy_out = 0
+
         for i, enu in enumerate(self.enu_mat_in): #TODO Edge cases!
             # print(i,enu[2],self.distSF_in,self.length_in)
             # if enu[2] > self.distSF_in:
-            if enu[2] >= self.distSF_in:
-                posx_in = self._map(self.distSF_in, enu[2], self.enu_mat_in[i+1][2], enu[0], self.enu_mat_in[i+1][0])
-                posy_in = self._map(self.distSF_in, enu[2], self.enu_mat_in[i+1][2], enu[1], self.enu_mat_in[i+1][1])
+            if enu[2] >= distSF_in:
+                posx_in = self._map(distSF_in, enu[2], self.enu_mat_in[i+1][2], enu[0], self.enu_mat_in[i+1][0])
+                posy_in = self._map(distSF_in, enu[2], self.enu_mat_in[i+1][2], enu[1], self.enu_mat_in[i+1][1])
                 break
 
-        distance_SF_out = self.distSF_in * self.in_out_ratio
+        distance_SF_out = distSF_in * self.in_out_ratio
         if distance_SF_out > self.length_out:
             distance_SF_out -= self.length_out
         for i, enu in enumerate(self.enu_mat_out):
@@ -146,19 +170,12 @@ class Point:
                 break
         
 
-        self.posx = self._map(self.lateral,0,self.track_width,posx_in,posx_out) 
-        self.posy = self._map(self.lateral,0,self.track_width,posy_in,posy_out)
+        self.posx_lidar = self._map(lateral,0,self.track_width,posx_in,posx_out) 
+        self.posy_lidar = self._map(lateral,0,self.track_width,posy_in,posy_out)
+        self.v_lidar   = velocity
 
-        self.posx_lidar = self.posx + random.gauss(0,1)
-        self.posy_lidar = self.posy + random.gauss(0,1)
-        self.v_lidar   = self.velocity + random.gauss(0,1)
-
-        obs_lidar_enu = [self.posx_lidar,self.posy_lidar,self.v_lidar]
-
-        # self.velocity += random.gauss(0,2)
-
-        return obs_mylap, obs_lidar_enu
-        
+        observation = [self.distSF_mylap, velocity, self.posx_lidar,self.posy_lidar,self.v_lidar]
+        return observation
 
 
     def _map(self, x, in_min, in_max, out_min, out_max):
