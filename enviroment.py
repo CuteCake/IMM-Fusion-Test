@@ -120,6 +120,13 @@ class Point:
         stateVec = [self.distSF_in,self.lateral,self.velocity,self.adjust]
         observation = self.observationFunc(stateVec)
 
+        observation[2] += random.gauss(0,1)
+        observation[3] += random.gauss(0,1)
+        observation[4] += random.gauss(0,1)
+
+        self.posx = observation[2]
+        self.posy = observation[3]
+
         obs_mylap = observation[:2]
         obs_lidar_enu = observation[2:]
 
