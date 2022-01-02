@@ -13,6 +13,7 @@ Red dots are the observation, white dots are the groud truth
 
 Author: Zhihao
 Dependency: pygame,  installation see:https://www.pygame.org/wiki/GettingStarted
+            pymap3d, use pip install pymap3d
 '''
 
 from hashlib import new
@@ -70,20 +71,26 @@ class Point:
     def __init__(self,enu_mat_in, enu_mat_out, distSF_in = 0,lateral = 5,velocity = 0):
 
         #Prepare the lookup table
-        self.enu_mat_in = enu_mat_in
-        self.length_in = np.linalg.norm(enu_mat_in[-1,:1]-enu_mat_in[0,:1])+enu_in[-1,2]#get the total length of the track
+        
+        self.length_in = np.linalg.norm(enu_mat_in[-1,:1]-enu_mat_in[0,:1])+enu_mat_in[-1,2]#get the total length of the track
         last_enu = np.array([enu_mat_in[0,0],enu_mat_in[0,1],self.length_in])
-        self.enu_mat_in = np.concatenate((self.enu_mat_in,last_enu[None,:]),axis=0) #add the first point to the end of the list
-        #Do it again for the outter ring
-        self.enu_mat_out = enu_mat_out
-        self.length_out = np.linalg.norm(enu_mat_out[-1,:1]-enu_mat_out[0,:1])+enu_out[-1,2]#get the total length of the track
-        self.enu_mat_out =np.concatenate((self.enu_mat_out,np.array([enu_mat_out[0,0],enu_mat_out[0,1],self.length_out])[None,:]),axis=0) #add the first point to the end of the list
+        enu_mat_in = np.concatenate((enu_mat_in,last_enu[None,:]),axis=0) #add the first point to the end of the list
 
+
+        last_enu = enu_mat_in[0,:]
+        self.enu_mat_in = np.concatenate((enu_mat_in,last_enu[None,:]),axis=0)
+        #Do it again for the outter ring
+
+        self.length_out = np.linalg.norm(enu_mat_out[-1,:1]-enu_mat_out[0,:1])+enu_mat_out[-1,2]#get the total length of the track
+        enu_mat_out =np.concatenate((enu_mat_out,np.array([enu_mat_out[0,0],enu_mat_out[0,1],self.length_out])[None,:]),axis=0) #add the first point to the end of the list
+        last_enu = enu_mat_out[0,:]
+        self.enu_mat_out = np.concatenate((enu_mat_out,last_enu[None,:]),axis=0)
         #Initialize the state
         self.distSF_in = distSF_in
         self.lateral = lateral
         self.velocity = velocity
         self.adjust = 1.01
+
 
         #Initialize the observation from my lap
         self.distSF_mylap = self.distSF_in * self.adjust
@@ -97,6 +104,7 @@ class Point:
 
         #Other parameters might be needed
         self.track_width = 15   # 15 m track width
+        self.in_out_ratio = 1.03785
         
 
 
@@ -122,14 +130,18 @@ class Point:
         posx_out = 0
         posy_out = 0
         for i, enu in enumerate(self.enu_mat_in): #TODO Edge cases!
-            if enu[2] > self.distSF_in:
+            # print(i,enu[2],self.distSF_in,self.length_in)
+            # if enu[2] > self.distSF_in:
+            if enu[2] >= self.distSF_in:
                 posx_in = self._map(self.distSF_in, enu[2], self.enu_mat_in[i+1][2], enu[0], self.enu_mat_in[i+1][0])
                 posy_in = self._map(self.distSF_in, enu[2], self.enu_mat_in[i+1][2], enu[1], self.enu_mat_in[i+1][1])
                 break
 
-        distance_SF_out = self.distSF_in * self.adjust
+        distance_SF_out = self.distSF_in * self.in_out_ratio
+        if distance_SF_out > self.length_out:
+            distance_SF_out -= self.length_out
         for i, enu in enumerate(self.enu_mat_out):
-            if enu[2] > distance_SF_out:
+            if enu[2] >= distance_SF_out:
                 posx_out = self._map(distance_SF_out, enu[2], self.enu_mat_out[i+1][2], enu[0], self.enu_mat_out[i+1][0])
                 posy_out = self._map(distance_SF_out, enu[2], self.enu_mat_out[i+1][2], enu[1], self.enu_mat_out[i+1][1])
                 break
@@ -144,16 +156,18 @@ class Point:
 
         obs_lidar_enu = [self.posx_lidar,self.posy_lidar,self.v_lidar]
 
-        self.velocity += random.gauss(0,2)
+        # self.velocity += random.gauss(0,2)
 
         return obs_mylap, obs_lidar_enu
         
+
+
     def _map(self, x, in_min, in_max, out_min, out_max):
         return ((x - in_min) * (out_max - out_min) / (in_max - in_min) + out_min)
 
 
 class PointEnvRaceTrack:
-    def __init__(self, width, height,enu_mat_in, enu_mat_out, distSF_in = 100,lateral = 5,velocity = 100):
+    def __init__(self, width, height,enu_mat_in, enu_mat_out, distSF_in = 0,lateral = 10,velocity = 100):
         
         self.point = Point(enu_mat_in, enu_mat_out, distSF_in,lateral,velocity)
 
@@ -185,6 +199,10 @@ class PointEnvRaceTrack:
         pygame.draw.circle(screen, (255,0,0), (int(point_X_lidar),int(point_Y_lidar)), 4)
 
 #Helper functions
+#Map origin:
+    #   latitude: 36.27207268554108
+    #   longitude: -115.0108130553903
+    #   altitude: 594.9593907749116 (not used)
 def get_enu_from_csv(csv_file):
     with open(csv_file,newline='') as csvfile:
         reader = csv.reader(csvfile)
@@ -208,29 +226,23 @@ def get_distance_SF(enu):
         distance_SF.append(total_distance)
     return np.array(distance_SF)[:,None]
 
+def prepare_data(csv_file):
+    #read in the csv file
+    enu_data = get_enu_from_csv(csv_file)
+    #get the distance SF for each point
+    distances_SF = get_distance_SF(enu_data)
+    #combine the distance SF to enu points, NOTE this dosnt append the first point in the end
+    return np.concatenate((enu_data,distances_SF),axis=1)
+
 if __name__ == '__main__':
 
-    #   latitude: 36.27207268554108
-    #   longitude: -115.0108130553903
-    #   altitude: 594.9593907749116
-
-    #read in the csv file
-    enu_in=get_enu_from_csv('vegas_insideBounds.csv')
-    enu_out=get_enu_from_csv('vegas_outsideBounds.csv')
-
-    #get the distance SF for each point
-    distances_SF_in = get_distance_SF(enu_in)
-    distances_SF_out = get_distance_SF(enu_out)
-    
-    #combine the distance SF to enu points, NOTE this dosnt append the first point in the end
-    enu_in = np.concatenate((enu_in,distances_SF_in),axis=1)
-    enu_out = np.concatenate((enu_out,distances_SF_out),axis=1) #(n,3), axis 1 are: E, N, S/F distance
+    enu_in = prepare_data('vegas_insideBounds.csv')
+    enu_out = prepare_data('vegas_outsideBounds.csv')
 
     #initialize visualization 
     enu_in_viz = enu_in[:,:2] + np.array([1920/2,1080/2])
     enu_out_viz = enu_out[:,:2] + np.array([1920/2,1080/2])
     
-
     pygame.init()
     screen = pygame.display.set_mode((1920, 1080))
     env = PointEnvRaceTrack(1920, 1080, enu_in, enu_out)
@@ -240,7 +252,7 @@ if __name__ == '__main__':
                 pygame.quit()
                 quit()
         screen.fill((0, 0, 0))
-        observation = env.step()
+        obs_mylap, obs_lidar = env.step()
         env.draw(screen)
         
         pygame.draw.aalines(screen, (255, 255, 255), True, enu_in_viz, 1)
