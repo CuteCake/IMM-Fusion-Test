@@ -12,6 +12,7 @@ Author: Zhihao
 '''
 
 import numpy as np
+import math
 
 class BaseFilter: #This is a template for motion filters, should be overwritten
     def __init__(self):
@@ -85,13 +86,24 @@ class ConstantVelocityFilter(BaseFilter):
         stateE = stateUpdateMatrix.dot(self.stateVector)
         stateCovarianceE = stateUpdateMatrix.dot(self.stateCovariance).dot(stateUpdateMatrix.T) + \
             self.stateTransitionCovariance
+
+        if observation is None:
+            self.state = stateE
+            self.stateCovariance = stateCovarianceE
+            return self.state, self.stateCovariance, np.zeros_like(self.observationCovariance)
         #Generate Kalman Gain
-        kalmanGain = stateCovarianceE.dot(self.observationMatrix.T).dot(np.linalg.inv(self.observationCovariance + \
-            self.observationMatrix.dot(stateCovarianceE).dot(self.observationMatrix.T)))
+
+        innovationCov = self.observationCovariance + \
+            self.observationMatrix.dot(stateCovarianceE).dot(self.observationMatrix.T)
+
+        kalmanGain = stateCovarianceE.dot(self.observationMatrix.T).dot(np.linalg.inv(innovationCov))
+
+        # kalmanGain = stateCovarianceE.dot(self.observationMatrix.T).dot(np.linalg.inv(self.observationCovariance + \
+        #     self.observationMatrix.dot(stateCovarianceE).dot(self.observationMatrix.T)))
         #Correct prediction
         self.stateVector = stateE + kalmanGain.dot(np.array(observation).T - self.observationMatrix.dot(stateE))
         self.stateCovariance = (np.eye(self.stateDim) - kalmanGain.dot(self.observationMatrix)).dot(stateCovarianceE)
-        return self.stateVector
+        return self.stateVector, self.stateCovariance, innovationCov
 
     def prediction(self, dt):
         '''
@@ -149,41 +161,65 @@ class ConstantVelocityFilter(BaseFilter):
         obsE = self.observationMatrix.dot(stateE)
 
         return stateE, stateCovarianceE, obsE
-
-class TrackFollowingFilter(BaseFilter):
+    
+class MyLapsFilter(BaseFilter):
     '''
-    state = [distSF_in, lateral, velocity, adjust].T          #(maybe add lag?)
-        distSF: distance from the start/finish line of the track using INNER ring
-                    the outer ring is 2*pi*15 = 94 m longer than the inner ring. in meters
-                max: 2422.75 (length_in)
-        lateral: the lateral distance from the inner ring of the track, in meters, 
-                [min 0, max 15]
-        velocity: the velocity of the car, m/s
-                no limit
-        adjust: the adjustment constant of distSF info from the my laps message, in respect to the inner ring
-                    distSF_my_laps = distSF_inner_ring * adjust     
-                [min 1, max 1.03785]
+    This is a EKF only for My Laps system
+
+    state = [x,  y,  vx,  vy].T          
+ 
 
     state transition:
-        distSF_in = distDF_in + velocity*dt
-        lateral = lateral
-        velocity = velocity
-        adjust = adjust
+        [1, 0, dt, 0], \
+        [0, 1, 0, dt], \
+        [0, 0, 1, 0], \
+        [0, 0, 0, 1]
+
+    #Consider using look up table for state transition? Not do it for now cuz it might cause convergance problem
 
     observation = 
-        [distSF_mylap, velocity, x , y, v].T  
+        [x_m, y_m, v_m].T  
 
-        obs_mylap = [distSF_mylap, velocity]
-        obs_lidar_enu = [x,y,v] 
+        obs_mylap = [distSF_mylap, velocity], -> [x_m, y_m, v_m] (by look up table)
+        obs_lidar_enu = [x,y,vx,vy] 
                 #The tracked point in ENU frame, note the tracker outputs in baselink
-                #Transform velocity from [vx,vy] to v
+
+
+    observation transformation by look up table:
+        [distSF_mylap, velocity] -> [x_mylap, y_mylap, vx_mylap, vy,_mylap]
+        There are some parameters to get:
+            distSF: distance from the start/finish line of the track using INNER ring
+                        the outer ring is 2*pi*15 = 94 m longer than the inner ring. in meters
+                    max: 2422.75 (length_in)
+            lateral: the lateral distance from the inner ring of the track, in meters, 
+        lateral: the lateral distance from the inner ring of the track, in meters, 
+            lateral: the lateral distance from the inner ring of the track, in meters, 
+        lateral: the lateral distance from the inner ring of the track, in meters, 
+            lateral: the lateral distance from the inner ring of the track, in meters, 
+        lateral: the lateral distance from the inner ring of the track, in meters, 
+            lateral: the lateral distance from the inner ring of the track, in meters, 
+                    [min 0, max 15]
+            velocity: the velocity of the car, m/s
+                    no limit
+            adjust: the adjustment constant of distSF info from the my laps message, in respect to the inner ring
+                        distSF_my_laps = distSF_inner_ring * adjust     
+                    distSF_my_laps = distSF_inner_ring * adjust     
+                        distSF_my_laps = distSF_inner_ring * adjust     
+                    distSF_my_laps = distSF_inner_ring * adjust     
+                        distSF_my_laps = distSF_inner_ring * adjust     
+                    distSF_my_laps = distSF_inner_ring * adjust     
+                        distSF_my_laps = distSF_inner_ring * adjust     
+                    [min 1, max 1.03785]
 
     observation function:
-        distSF_mylap = distSF_in * adjust
-        velocity_mylap = velocity         #up to 3% error, don't care
-        x = from lookup table(state)
-        y = from lookup table
-        v = velocity
+        x_m = x
+        y_m = y
+        v_m = sqrt(vx^2 + vy^2)
+
+    observation jacobian matrix:
+        [1, 0, 0, 0], \
+        [0, 1, 0, 0], \
+        [0, 0, vx/sqrt(vx^2+vy^2), vx/sqrt(vx^2+vy^2)]
 
     enu_mat_in = :   the lookup table of the track
         [[x,y,distSF_in]
@@ -192,34 +228,29 @@ class TrackFollowingFilter(BaseFilter):
         ...
         [x,y,distSF_in]]
     '''
-    def __init__(self, enu_mat_in, enu_mat_out, distSF_in = 0,lateral = 5,velocity = 0, adjust = 1.01):
 
+    def __init__(self, enu_mat_in, enu_mat_out, init_state = [0,0,0,0], stateNoise=1, observationNoise=1):
         #Prepare the lookup table
         
         self.length_in = np.linalg.norm(enu_mat_in[-1,:2]-enu_mat_in[0,:2])+enu_mat_in[-1,2]#get the total length of the track
-        # enu_mat_in =np.concatenate((enu_mat_in,np.array([enu_mat_in[0,0],enu_mat_in[0,1],self.length_in])[None,:]),axis=0)
-        # last_enu = enu_mat_in[0,:]
-
-        # self.enu_mat_in = np.concatenate((enu_mat_in,last_enu[None,:]),axis=0)
+        enu_mat_in =np.concatenate((enu_mat_in,np.array([enu_mat_in[0,0],enu_mat_in[0,1],self.length_in])[None,:]),axis=0)
+        last_enu = enu_mat_in[0,:]
+        self.enu_mat_in = np.concatenate((enu_mat_in,last_enu[None,:]),axis=0)
         self.enu_mat_in = enu_mat_in
-
-        new_dot = np.array([enu_mat_in[0,0],enu_mat_in[0,1],self.length_in])[None,:]
         #Do it again for the outter ring
-
         self.length_out = np.linalg.norm(enu_mat_out[-1,:2]-enu_mat_out[0,:2])+enu_mat_out[-1,2]#get the total length of the track
         enu_mat_out =np.concatenate((enu_mat_out,np.array([enu_mat_out[0,0],enu_mat_out[0,1],self.length_out])[None,:]),axis=0) #add the first point to the end of the list
         last_enu = enu_mat_out[0,:]
         self.enu_mat_out = np.concatenate((enu_mat_out,last_enu[None,:]),axis=0)
 
         #Initialize the state
-        self.state = np.array([distSF_in, lateral, velocity, adjust]).T
+        self.state = np.array(init_state).T
 
 
-        #Initialize the output from Lidar
-        self.posx = 0
-        self.posy = 0
-        self.vx = 0
-        self.vy = 0
+        #Initialize the transformed observation from MyLaps system
+        self.x_m = 0
+        self.y_m = 0
+        self.v_m = 0
 
         #Other parameters might be needed
         self.track_width = 15   # 15 m track width
@@ -228,91 +259,71 @@ class TrackFollowingFilter(BaseFilter):
 
 
         #Noise assumption about state transition and observation
-        # state =                   [distSF_in, lateral, velocity, adjust]
-        self.state_tran_noise_cov = np.diag([    2,       0.1,       1,   0.00001])
-        # observation =          [distSF_mylap, velocity, x,    y,  v] 
-        self.obs_noise_cov = np.diag([5,        5,       3,     3,   1])
+
+        # state =                   [x,  y,  vx,  vy].T  
+        self.state_tran_noise_cov = np.diag([    1,       1,       1,   1])*stateNoise
+        # observation =              [x_m, y_m, v_m].T 
+        self.obs_noise_cov = np.diag([5,        5,       2])*observationNoise
 
         #Initial state covariance
         self.stateCovariance = self.state_tran_noise_cov * 5
-                                            
         self.observationCovariance = self.obs_noise_cov 
 
         self.last_observation = None
 
-    def stateUpdate(self, dt, stateVector):
-        '''
-        state transition:
-            distSF_in = distDF_in + velocity*dt
-            lateral = lateral
-            velocity = velocity
-            adjust = adjust
-        '''
-        distSF_in = stateVector[0] + stateVector[2]*dt
-        lateral =  stateVector[1]
-        velocity = stateVector[2]
-        adjust = 1.03785#stateVector[3]
+    def stateUpdate(self, dt, stateVec):
+        self.state = self.getStateUpdateMatrix(dt).dot(stateVec)
+        return self.state
 
-        # should not Check the boundary here
-        # if distSF_in > self.length_in:
-        #     distSF_in -= self.length_in
-        # if distSF_in < 0:
-        #     distSF_in += self.length_in
-
-        if lateral > self.track_width:
-            lateral = self.track_width
-        if lateral < 0:
-            lateral = 0
-        
-        if adjust > 1.03785:
-            adjust = 1.03785
-        if adjust < 0.99:
-            adjust = 0.99
-
-        stateVector = np.array([distSF_in, lateral, velocity, adjust]).T
-        return stateVector
-
-
-    def getStateUpdateJacobian(self, dt): 
-        '''
-        state transition:
-            distSF_in = distDF_in + velocity*dt
-            lateral = lateral
-            velocity = velocity
-            adjust = adjust
-
-        Funny enough, the Jacobian is not related to the state 
-        '''
-        Jacobian =               np.array([ [1, 0, dt, 0], \
-                                            [0, 1, 0, 0], \
+    def getStateUpdateMatrix(self, dt): #This is equivalent to the state transition jacobean matrix
+        self.stateUpdateMatrix = np.array([ [1, 0, dt, 0], \
+                                            [0, 1, 0, dt], \
                                             [0, 0, 1, 0], \
                                             [0, 0, 0, 1]])
-        return Jacobian
-    
-    def observationFunc(self,stateVector):
-        '''
-              state = [distSF_in, lateral, velocity, adjust].T
-        observation = [distSF_mylap, velocity, x , y, v].T 
-        Use the lookup table to get the observation
-        '''
+        return self.stateUpdateMatrix
 
-        distSF_in = stateVector[0].copy()
-        lateral = stateVector[1]
-        velocity = stateVector[2]
-        adjust = stateVector[3]
+    def getObservationJacobian(self, stateVec):
+        '''
+        state = [x,  y,  vx,  vy].T          
+        '''
+        vx = stateVec[2]+1e-6
+        vy = stateVec[3]+1e-6
+        observationJacobian = np.array(    [[1.0, 0, 0, 0], \
+                                            [0, 1.0, 0, 0], \
+                                            [0, 0, vx/math.sqrt(vx**2+vy**2), vx/math.sqrt(vx**2+vy**2)]])
 
+        return observationJacobian
+
+    def observationFunc(self, stateVec):
+        '''
+        state = [x,  y,  vx,  vy].T    
+        observation function:
+            x_m = x
+            y_m = y
+            v_m = sqrt(vx^2 + vy^2)      
+        '''
+        self.x_m = stateVec[0]
+        self.y_m = stateVec[1]
+        self.v_m = math.sqrt(stateVec[2]**2 + stateVec[3]**2)
+        return np.array([self.x_m, self.y_m, self.v_m]).T
+
+    def myLaps2xyv(self,obs_mylap):
+        '''
+        obs_mylap = [distSF_mylap, velocity], -> [x_m, y_m] 
+        '''
+        adjust = 1.03785
+        distSF_in = obs_mylap[0]/adjust
+        lateral = 7.5
+        velocity = obs_mylap[1]
+        
         if distSF_in < 0 :
             print('distSF_in is negative')
             distSF_in += self.length_in
         if distSF_in > self.length_in:
-            print('distSF_in is larger than the length of the track')
+            print('distSF_in too large')
             distSF_in = distSF_in % self.length_in
 
-        #Get the my lap observation
-        self.distSF_mylap = distSF_in * adjust
-        self.velocity_mylap = velocity
-
-        #Get the Lidar observation
+        #Get the XY
             # enumerate through the enu look up table, find the entry with the closest distance, and interpolate the distance from 
             #point i and point i+1
 
@@ -354,91 +365,35 @@ class TrackFollowingFilter(BaseFilter):
             posx_out = self._map(distance_SF_out, self.enu_mat_out[-3,2], self.enu_mat_out[5,2] + self.length_out, self.enu_mat_out[-3,0], self.enu_mat_out[5,0])
         if posy_out is None:
             posy_out = self._map(distance_SF_out, self.enu_mat_out[-3,2], self.enu_mat_out[5,2] + self.length_out, self.enu_mat_out[-3,1], self.enu_mat_out[5,1])
-        '''
-        DEBUG
-        '''
-        # self.test_posx_in = posx_in
-        # self.test_posy_in = posy_in
-        # self.test_posx_out = posx_out
-        # self.test_posy_out = posy_out
 
-        self.posx_lidar = self._map(lateral,0,self.track_width,posx_in,posx_out) 
-        self.posy_lidar = self._map(lateral,0,self.track_width,posy_in,posy_out)
+
+        self.posx_middle = self._map(lateral,0,self.track_width,posx_in,posx_out) 
+        self.posy_middle = self._map(lateral,0,self.track_width,posy_in,posy_out)
         self.v_lidar   = velocity
 
-        observation = [self.distSF_mylap, velocity, self.posx_lidar,self.posy_lidar,self.v_lidar]
-        return observation
-
-    def observationFunc_np(self,stateVector):
-        return np.array(self.observationFunc(stateVector)).T
-
-    def getObservationJacobian(self,stateVector):
-        '''
-        state = [distSF_in, lateral, velocity, adjust]
-        observation = [distSF_mylap, velocity, x,y,v] 
-        observation function:
-            distSF_mylap = distSF_in * adjust
-            velocity_mylap = velocity         #up to 3% error, don't care
-            x = from lookup table(state)
-            y = from lookup table
-            v = velocity
-
-        the Jacobian matrix:
-            [adjust,    0,      0,      distSF_in],
-            [0,         0,      1,          0    ],
-            [   M1,      M2,     0,         0    ],
-            [   M3,      M4,    0,          0    ],
-            [0,         0,      1,          0    ]
-        '''
-        obs_of_stateVector = self.observationFunc_np(stateVector)
-        #Calc M1 dx/ddistSF
-        state_offset = stateVector
-        state_offset[0]+=0.1
-        obs_diff = self.observationFunc_np(state_offset)-obs_of_stateVector
-        m1 = obs_diff[2]*10
-        #Calc M2 dx/dlateral
-        state_offset = stateVector
-        state_offset[1]+=0.1
-        obs_diff = self.observationFunc_np(state_offset)-obs_of_stateVector
-        m2 = obs_diff[2]*10
-        #Calc M3 dy/ddistSF
-        state_offset = stateVector
-        state_offset[0]+=0.1
-        obs_diff = self.observationFunc_np(state_offset)-obs_of_stateVector
-        m3 = obs_diff[3]*10
-        #Calc M4 dy/dlateral
-        state_offset = stateVector
-        state_offset[1]+=0.1
-        obs_diff = self.observationFunc_np(state_offset)-obs_of_stateVector
-        m4 = obs_diff[3]*10
-
-        adjust = stateVector[3]
-        distSF_in = stateVector[0]
-
-        #assimble the Jacobian matrix
-        JacobianMatrix = np.array([[adjust, 0,       0, distSF_in], \
-                                    [0,     0,      1,      0], \
-                                    [m1,    m2,     0,     0], \
-                                    [m3,    m4,     0,      0], \
-                                    [0,     0,      1,      0]])
-        return JacobianMatrix
+        xyv = [self.posx_middle,self.posy_middle,velocity]
+        return xyv
 
     def _map(self, x, in_min, in_max, out_min, out_max):
         return ((x - in_min) * (out_max - out_min) / (in_max - in_min) + out_min)
-
-    def update(self, observation,  dt, observationCovariance=None ):
+    
+    def update(self, obs_mylap,  dt, observationCovariance=None ):
         if observationCovariance is not None:
-            self.obs_noise_cov = observationCovariance
+            self.observationCovariance = observationCovariance
         '''
-        observation =  [distSF_mylap, velocity, x , y, v].T  
+        obs_mylap = [distSF_mylap, velocity], -> [x_m, y_m, v_m] (by look up table)
+        observation: [x,y,v]
         dt: time since last update
         '''
-        # adjust the data dypt of the observation
-        observation = np.array(observation).T
-        
+        if obs_mylap is None: # Give a dummy observation which is dead reckoning from the last observation
+            last_distance = self.last_observation_mylap[0]
+            last_velocity = self.last_observation_mylap[1]
+            now_distance = last_distance + last_velocity * dt * 1.03
+            obs_mylap = [now_distance, last_velocity]
+            self.observationCovariance = np.diag([1,1,1])
 
         #Calculate the Jacobian matrix
-        stateUpdateJacobian = self.getStateUpdateJacobian(dt)
+        stateUpdateJacobian = self.getStateUpdateMatrix(dt)
         obsJacobian = self.getObservationJacobian(self.state)
 
         #Prediction step
@@ -446,117 +401,30 @@ class TrackFollowingFilter(BaseFilter):
         stateCovE = stateUpdateJacobian.dot(self.stateCovariance).dot(stateUpdateJacobian.T) + \
             self.state_tran_noise_cov
 
-        #Generate Kalman Gain
-        innovation = observation - self.observationFunc(self.state)
-        innovationCov = obsJacobian.dot(stateCovE).dot(obsJacobian.T) + self.obs_noise_cov
-
-        kalmanGain = stateCovE.dot(obsJacobian.T).dot(np.linalg.inv(innovationCov))
-        #Correct prediction
-        self.state = stateE + kalmanGain.dot(np.array(innovation))
-        self.stateCovariance = (np.eye(self.stateDim) - kalmanGain.dot(obsJacobian)).dot(stateCovE)
-
-        # distSF_in = self.state[0] + self.state[2]*dt
-        # lateral = self.state[1]
-        # velocity = self.state[2]
-        # adjust = self.state[3]
-
-        # #Check the boundary
-        # if distSF_in > self.length_in:
-        #     distSF_in -= self.length_in
-        # if distSF_in < 0:
-        #     distSF_in += self.length_in
-
-        # if lateral > self.track_width:
-        #     lateral = self.track_width
-        # if lateral < 0:
-        #     lateral = 0
-        
-        # if adjust > 1.03785:
-        #     adjust = 1.03785
-        # if adjust < 0.99:
-        #     adjust = 0.99
-
-        # self.state = np.array([distSF_in, lateral, velocity, adjust]).T
-
-
-        self.last_observation = observation
-
-        return self.state, self.stateCovariance, innovationCov
-
-    def update_mylap_only(self, observation,  dt, observationCovariance=None ):
-        '''
-        observation = [distSF_mylap, velocity].T  
-        dt: time since last update
-        '''
-        # distSF_in = self.state[0] + self.state[2]*dt
-        lateral = self.state[1]
-        # velocity = self.state[2]
-        adjust = self.state[3]
-
-        # self.substate = np.array([distSF_in, velocity]).T
-        # adjust the data dypt of the observation
-        observation = np.array(observation).T
-
-        #Calculate the Jacobian matrix
-        stateUpdateJacobian = self.getStateUpdateJacobian(dt)
-        obsJacobian = self.getObservationJacobian(self.state)
-
-        """
-        The different part: the observation and the jacobian matrix is different
-        """
-        observation = observation[:2]
-        obsJacobian = obsJacobian[:2,:]
-
-        #Prediction step
-        stateE = self.stateUpdate(dt,self.state)
-        stateCovE = stateUpdateJacobian.dot(self.stateCovariance).dot(stateUpdateJacobian.T) + \
-            self.state_tran_noise_cov
-
-        #Generate Kalman Gain
-        innovation = observation - self.observationFunc(self.state)[0:2]
-        ''' The different part: obs func and obs cov is different'''
-        innovationCov = obsJacobian.dot(stateCovE).dot(obsJacobian.T) + self.obs_noise_cov[:2,:2]
-
-        kalmanGain = stateCovE.dot(obsJacobian.T).dot(np.linalg.inv(innovationCov))
-        #Correct prediction
-        self.state = stateE + kalmanGain.dot(np.array(innovation))
-        self.stateCovariance = (np.eye(self.stateDim) - kalmanGain.dot(obsJacobian)).dot(stateCovE)
-
-        # going back check
-        if self.last_observation is not None:
-            if self.last_observation[0] > observation[0]+100:  #the car passing start line
-                self.state[0] = observation[0]
-                # adjust = self.last_observation[0]/self.length_in
-
-        if lateral > self.track_width:
-            lateral = self.track_width
-        if lateral < 0:
-            lateral = 0
-        
-        if adjust > 1.03785:
-            adjust = 1.03785
-        if adjust < 0.99:
-            adjust = 0.99
-
-        if self.state[0] < 0 or self.state[0] > self.length_in:
+        if obs_mylap is None:
             self.state = stateE
-        
-        #By passing the EKF
-        self.state[1] = lateral
-        self.state[3] = adjust
+            self.stateCovariance = stateCovE
+            return self.state, self.stateCovariance, np.zeros_like(self.observationCovariance)
+        else:
+            # Converge the observation to xyv space after we know we have a measurement
+            xyv = self.myLaps2xyv(obs_mylap)
+            # adjust the data dypt of the observation
+            observation = np.array(xyv).T
 
-        self.last_observation = observation
+            #Generate Kalman Gain
+            innovation = observation - self.observationFunc(self.state)
+            innovationCov = obsJacobian.dot(stateCovE).dot(obsJacobian.T) + self.obs_noise_cov
 
-        return self.state, self.stateCovariance, innovationCov
+            kalmanGain = stateCovE.dot(obsJacobian.T).dot(np.linalg.inv(innovationCov))
+            #Correct prediction
+            self.state = stateE + kalmanGain.dot(np.array(innovation))
+            self.stateCovariance = (np.eye(self.stateDim) - kalmanGain.dot(obsJacobian)).dot(stateCovE)
 
+            self.last_observation = observation
+            self.last_observation_mylap = obs_mylap
 
-    def getXY(self,stateVector):
-        '''
-        state = [distSF_in, lateral, velocity, adjust]
-        obs = [distSF_mylap, velocity, x , y, v].T 
-        '''
-        obs_of_stateVector = self.observationFunc(stateVector)
-        return obs_of_stateVector[2],obs_of_stateVector[3]
+            return self.state, self.stateCovariance, innovationCov
+
 
 if __name__ == '__main__':
 
@@ -571,34 +439,10 @@ if __name__ == '__main__':
     enu_out_viz = enu_out[:,:2] + np.array([1920/2,1080/2])
     
     
-    env = PointEnvRaceTrack(1920, 1080, enu_in, enu_out, distSF_in=2000, lateral=10, velocity=100,adjust=1.03785)
+    env = PointEnvRaceTrack(1920, 1080, enu_in, enu_out, distSF_in=1000, lateral=10, velocity=50,adjust=1.03785)
 
-    track_filter = TrackFollowingFilter(enu_in, enu_out, distSF_in=200, lateral= 5,velocity=10, adjust=1.03785)
-    
-    # #plot a line of x calculated from distSF_in
-    # x_in = np.linspace(0,track_filter.length_in+100,100)
-    # test_posx_in = []
-    # test_posy_in = []
-    # test_posx_out = []
-    # test_posy_out = []
-    # for x in x_in:
-    #     track_filter.getXY(np.array([x,0,0,1.0]))
-    #     test_posx_in.append(track_filter.test_posx_in)
-    #     test_posy_in.append(track_filter.test_posy_in)
-    #     test_posx_out.append(track_filter.test_posx_out)
-    #     test_posy_out.append(track_filter.test_posy_out)
-    
-    # #plot 4 subplots for each value
-    # fig, axs = plt.subplots(4,1,figsize=(10,10))
-    # axs[0].plot(x_in,test_posx_in)
-    # axs[0].set_title('test_posx_in')
-    # axs[2].plot(x_in,test_posx_out)
-    # axs[2].set_title('test_posx_out')
-    # axs[1].plot(x_in,test_posy_in)
-    # axs[1].set_title('test_posy_in')
-    # axs[3].plot(x_in,test_posy_out)
-    # axs[3].set_title('test_posy_out')
-    # plt.show()
+    mylaps_filter = MyLapsFilter(enu_in, enu_out)
+    lidar_filter = ConstantVelocityFilter(stateNoise=5,observationNoise=10)
 
 
     pygame.init()
@@ -614,26 +458,29 @@ if __name__ == '__main__':
         obs_mylap, obs_lidar = env.step()
         env.draw(screen)
 
-        #concatenate the observation
-        obs = obs_mylap.copy()
-        for i in obs_lidar:
-            obs.append(i)
+        if (time.time() - start_time)%30 > 5 :
+            obs_mylap = None
+            print('No mylap')
+        # Use the kalman filter1
+        stateVector, stateCovariance, innovationCov = mylaps_filter.update(obs_mylap, env.get_last_dt())
 
-        # Use the kalman filter
-        if (time.time() - start_time)%10 > 5 :
-            print('using Lidar Fusion')
-            stateVector, stateCovariance, innovationCov = track_filter.update(obs, env.get_last_dt())
-        else:
-            print('use My Lap only')
-            stateVector, stateCovariance, innovationCov = track_filter.update_mylap_only(obs_mylap, env.get_last_dt())
-
-        # print(stateVector,stateCovariance[0][0])
-        xpos , ypos = track_filter.getXY(stateVector)
-
+        # Visualize the result 1
+        xpos , ypos = stateVector[0], stateVector[1]
         xpos_viz = xpos + 1920/2
         ypos_viz = ypos + 1080/2
-        
         pygame.draw.circle(screen, (0, 0, 255), (int(xpos_viz), int(ypos_viz)), 5)
+        
+        # #Use the kalman filter2
+        # print('no lidar')
+        if obs_lidar is not None:
+            obs_lidar = obs_lidar[:2]
+        stateVector2 , stateCovariance2 , __ = lidar_filter.update(obs_lidar, env.get_last_dt())
+        # Visualize the result 2
+        xpos2 , ypos2 = stateVector2[0], stateVector2[1]
+        xpos_viz2 = xpos2 + 1920/2
+        ypos_viz2 = ypos2 + 1080/2
+        pygame.draw.circle(screen, (0, 255, 0), (int(xpos_viz2), int(ypos_viz2)), 3)
+
         
         pygame.draw.aalines(screen, (255, 255, 255), True, enu_in_viz, 1)
         pygame.draw.circle(screen, (255, 255, 255), (int(enu_in_viz[0][0]),int(enu_in_viz[0][1])), 2)

@@ -49,9 +49,9 @@ class Point:
 
     observation:
         obs_mylap = [distSF_mylap, velocity]
-        obs_lidar_enu = [x,y,vx,vy] 
+        obs_lidar_enu = [x,y,v] 
                 #The tracked point in ENU frame, note the tracker outputs in baselink
-                
+                #Transform velocity from [vx,vy] to v
 
     observation function:
         distSF_mylap = distSF_in * adjust
@@ -110,8 +110,6 @@ class Point:
     def update(self,dt): 
         '''
         Update the state of the enviroment and get the observation
-        observation = [self.distSF_mylap, velocity, self.posx_lidar,self.posy_lidar,self.v_lidar]
-        obs_lidar_enu = [self.posx,self.posy,vx,vy]
         '''
         #Update the state
         self.distSF_in += self.velocity*dt
@@ -121,36 +119,16 @@ class Point:
 
         stateVec = [self.distSF_in,self.lateral,self.velocity,self.adjust]
         observation = self.observationFunc(stateVec)
-        obs_no_noise = observation
-
-        self.posx = observation[2]
-        self.posy = observation[3]
 
         observation[2] += random.gauss(0,1)
         observation[3] += random.gauss(0,1)
         observation[4] += random.gauss(0,1)
 
-
+        self.posx = observation[2]
+        self.posy = observation[3]
 
         obs_mylap = observation[:2]
         obs_lidar_enu = observation[2:]
-
-        #Calc dx/ddistSF
-        state_offset = stateVec
-        state_offset[0]+=0.1
-        obs_diff = self.observationFunc_np(state_offset)-obs_no_noise
-        dxddistSF = obs_diff[2]*1
-
-        #Calc M3 dy/ddistSF
-        state_offset = stateVec
-        state_offset[0]+=0.1
-        obs_diff = self.observationFunc_np(state_offset)-obs_no_noise
-        dyddistSF = obs_diff[3]*1
-
-        vx = dxddistSF*self.velocity 
-        vy = dyddistSF*self.velocity
-
-        obs_lidar_enu = [observation[2],observation[3],vx,vy]
 
         # self.velocity += random.gauss(0,2)
 
@@ -159,7 +137,7 @@ class Point:
     def observationFunc(self,stateVector):
         '''
               state = [distSF_in, lateral, velocity, adjust].T
-        observation = [distSF_mylap, velocity, x , y, vx, vy].T 
+        observation = [distSF_mylap, velocity, x , y, v].T 
         Use the lookup table to get the observation
         '''
         
@@ -176,23 +154,18 @@ class Point:
             # enumerate through the enu look up table, find the entry with the closest distance, and interpolate the distance from 
             #point i and point i+1
 
-        posx_in = None
-        posy_in = None
-        posx_out = None
-        posy_out = None
+        posx_in = 0
+        posy_in = 0
+        posx_out = 0
+        posy_out = 0
 
         for i, enu in enumerate(self.enu_mat_in): #TODO Edge cases!
+            # print(i,enu[2],self.distSF_in,self.length_in)
+            # if enu[2] > self.distSF_in:
             if enu[2] >= distSF_in:
                 posx_in = self._map(distSF_in, enu[2], self.enu_mat_in[i+1][2], enu[0], self.enu_mat_in[i+1][0])
                 posy_in = self._map(distSF_in, enu[2], self.enu_mat_in[i+1][2], enu[1], self.enu_mat_in[i+1][1])
                 break
-
-        """NOTE This is a dirty hack to close the gap:"""
-        if posx_in is None:
-            posx_in = self._map(distSF_in, self.enu_mat_in[-3,2], self.enu_mat_in[5,2] + self.length_in,  self.enu_mat_in[-3,0],self.enu_mat_in[5,0])
-        if posy_in is None:
-            posy_in = self._map(distSF_in, self.enu_mat_in[-3,2], self.enu_mat_in[5,2] + self.length_in,  self.enu_mat_in[-3,1],self.enu_mat_in[5,1])
-            
 
         distance_SF_out = distSF_in * self.in_out_ratio
         if distance_SF_out > self.length_out:
@@ -203,16 +176,11 @@ class Point:
                 posy_out = self._map(distance_SF_out, enu[2], self.enu_mat_out[i+1][2], enu[1], self.enu_mat_out[i+1][1])
                 break
         
-        """NOTE This is a dirty hack to close the gap:"""
-        if posx_out is None:
-            posx_out = self._map(distance_SF_out, self.enu_mat_out[-3,2], self.enu_mat_out[5,2] + self.length_out, self.enu_mat_out[-3,0], self.enu_mat_out[5,0])
-        if posy_out is None:
-            posy_out = self._map(distance_SF_out, self.enu_mat_out[-3,2], self.enu_mat_out[5,2] + self.length_out, self.enu_mat_out[-3,1], self.enu_mat_out[5,1])
 
         self.posx_lidar = self._map(lateral,0,self.track_width,posx_in,posx_out) 
         self.posy_lidar = self._map(lateral,0,self.track_width,posy_in,posy_out)
         self.v_lidar   = velocity
-        
+
         observation = [self.distSF_mylap, velocity, self.posx_lidar,self.posy_lidar,self.v_lidar]
         return observation
 
@@ -220,15 +188,11 @@ class Point:
     def _map(self, x, in_min, in_max, out_min, out_max):
         return ((x - in_min) * (out_max - out_min) / (in_max - in_min) + out_min)
 
-    def observationFunc_np(self,stateVector):
-        return np.array(self.observationFunc(stateVector)).T
 
 class PointEnvRaceTrack:
     def __init__(self, width, height,enu_mat_in, enu_mat_out, distSF_in = 2410,lateral = 10,velocity = 100, adjust = 1.01):
         
         self.point = Point(enu_mat_in, enu_mat_out, distSF_in,lateral,velocity,adjust)
-
-        self.point_ego = Point(enu_mat_in, enu_mat_out, distSF_in*1.1,lateral,velocity*0.9,adjust)
 
         self.width = width
         self.height = height
@@ -239,14 +203,6 @@ class PointEnvRaceTrack:
     def step(self):
         dt = self.get_last_dt()
         self.obs_mylap, self.obs_lidar_enu = self.point.update(dt)
-        self.obs_ego_mylap, self.obs_ego_lidar_enu = self.point_ego.update(dt)
-
-        xy = np.array(self.obs_lidar_enu[:2])
-        xy_ego = np.array(self.obs_ego_lidar_enu[:2])
-
-        if (np.linalg.norm(xy-xy_ego) > 30):
-            self.obs_lidar_enu = None
-
 
         self.clock.tick(60) #+random.randrange(-20,20)) #This limits The env to 60 frames per second by adding delay to the loop
 
@@ -257,30 +213,19 @@ class PointEnvRaceTrack:
 
     def draw(self, screen):
 
-        # white point for groung truth of the opponent
         point_X = self.point.posx + self.width/2
         point_Y = self.point.posy + self.height/2
         pygame.draw.circle(screen, (255,255,255), (int(point_X),int(point_Y)), 4)
 
-        #red dots for the lidar points
-        if(self.obs_lidar_enu is not None):
-            point_X_lidar = self.obs_lidar_enu[0] + self.width/2
-            point_Y_lidar = self.obs_lidar_enu[1] + self.height/2
-            pygame.draw.circle(screen, (255,0,0), (int(point_X_lidar),int(point_Y_lidar)), 4)
+        point_X_lidar = self.obs_lidar_enu[0] + self.width/2
+        point_Y_lidar = self.obs_lidar_enu[1] + self.height/2
+        pygame.draw.circle(screen, (255,0,0), (int(point_X_lidar),int(point_Y_lidar)), 4)
 
-        # Green circle is the ego car detection range
-        point_X_ego = self.point_ego.posx + self.width/2
-        point_Y_ego = self.point_ego.posy + self.height/2
-        pygame.draw.circle(screen, (0,255,0), (int(point_X_ego),int(point_Y_ego)), 30, 1)
-
-
-'''
 #Helper functions
 #Map origin:
     #   latitude: 36.27207268554108
     #   longitude: -115.0108130553903
     #   altitude: 594.9593907749116 (not used)
-'''
 def get_enu_from_csv(csv_file):
     with open(csv_file,newline='') as csvfile:
         reader = csv.reader(csvfile)
@@ -292,7 +237,9 @@ def get_enu_from_csv(csv_file):
         
     enu = np.array(enu)[:,:2]
     return enu
-
+    enu = enu + np.array([1920/2,1080/2])
+    # print(enu)
+#helper function
 def get_distance_SF(enu):
     total_distance = 0
     distance_SF = [0]
