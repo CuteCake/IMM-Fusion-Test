@@ -526,7 +526,7 @@ class TrackFollowingFilter(BaseFilter):
         if self.last_observation is not None:
             if self.last_observation[0] > observation[0]+100:  #the car passing start line
                 self.state[0] = observation[0]
-                # adjust = self.last_observation[0]/self.length_in
+                adjust = self.state[3]
 
         if lateral > self.track_width:
             lateral = self.track_width
@@ -620,14 +620,14 @@ if __name__ == '__main__':
             obs.append(i)
 
         # Use the kalman filter
-        # if (time.time() - start_time)%10 > 5 and False:
-        #     print('using Lidar Fusion')
-        #     stateVector, stateCovariance, innovationCov = track_filter.update(obs, env.get_last_dt())
-        # else:
+        if (time.time() - start_time)%10 > 5 :
+            print('using Lidar Fusion')
+            stateVector, stateCovariance, innovationCov = track_filter.update(obs, env.get_last_dt())
+        
 
-        if (time.time() - start_time)%10 > 5:
-            obs_mylap = None
-            print("dropping mylap")
+        # if (time.time() - start_time)%10 > 5:
+        #     obs_mylap = None
+        #     print("dropping mylap")
         
         stateVector, stateCovariance, innovationCov = track_filter.update_mylap_only(obs_mylap, env.get_last_dt())
 

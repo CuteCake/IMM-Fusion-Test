@@ -228,7 +228,7 @@ class PointEnvRaceTrack:
         
         self.point = Point(enu_mat_in, enu_mat_out, distSF_in,lateral,velocity,adjust)
 
-        self.point_ego = Point(enu_mat_in, enu_mat_out, distSF_in*1.1,lateral,velocity*0.9,adjust)
+        self.point_ego = Point(enu_mat_in, enu_mat_out, distSF_in*0.9,lateral,velocity*1.2,adjust)
 
         self.width = width
         self.height = height
